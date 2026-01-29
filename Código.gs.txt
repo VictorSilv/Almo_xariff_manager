@@ -1,0 +1,82 @@
+Código.gs
+
+function doGet() {
+  return HtmlService.createTemplateFromFile('Index')
+    .evaluate()
+    .setTitle('Almoxarifado Controlhe 2026')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+function include(filename) {
+  return HtmlService.createHtmlOutputFromFile(filename).getContent();
+}
+
+// Retorna lista de itens e stocks para o UI
+
+// Retorna lista de itens e stocks para o UI
+function getStockData() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const agora = new Date();
+  
+  // Mapeamento manual para garantir o match com 'Jan_2026', 'Fev_2026', etc.
+  const mesesAbrev = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+  const mesAbrev = mesesAbrev[agora.getMonth()];
+  const nomeAba = mesAbrev + "_2026";
+  
+  const sheet = ss.getSheetByName(nomeAba);
+  
+  if (!sheet) {
+    Logger.log("Aba não encontrada: " + nomeAba);
+    return [];
+  }
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 3) return []; // Se a tabela estiver vazia
+
+  // Pegamos da Coluna A (1) até a I (9)
+  const data = sheet.getRange(3, 1, lastRow - 2, 9).getValues();
+  
+  return data
+    .map(r => ({
+      nome: r[0],       // Coluna A (Índice 0)
+      disponivel: r[8]  // Coluna I (Índice 8)
+    }))
+    .filter(r => r.nome !== "" && r.nome !== undefined);
+}
+
+// Processa a retirada
+function submitMultiplosItens(carrinho, responsavel) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const agora = new Date();
+  const mesesAbrev = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+  const nomeAba = mesesAbrev[agora.getMonth()] + "_2026";
+  const sheet = ss.getSheetByName(nomeAba);
+  const logSheet = ss.getSheetByName('Resumo') || ss.insertSheet('Resumo');
+
+  const data = sheet.getDataRange().getValues();
+  const colMap = { "FB": 5, "FF": 6, "Outra": 7 }; // Colunas E, F, G
+
+  // Itera sobre cada item no carrinho vindo do cliente
+  for (let itemNome in carrinho) {
+    let quantidade = Number(carrinho[itemNome]);
+    if (quantidade <= 0) continue;
+
+    // Encontra a linha do item na Coluna A (índice 0)
+    for (let i = 2; i < data.length; i++) {
+      if (data[i][0] === itemNome) {
+        // Atualiza a célula do funcionário
+        let celula = sheet.getRange(i + 1, colMap[responsavel]);
+        celula.setValue((Number(celula.getValue()) || 0) + quantidade);
+        
+        // Log no Resumo
+        logSheet.appendRow([agora, itemNome, quantidade, responsavel]);
+        break;
+      }
+    }
+  }
+  return true;
+}
+
+
+function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }

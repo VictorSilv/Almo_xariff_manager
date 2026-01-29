@@ -1,0 +1,405 @@
+<script>
+class AppSession {
+  constructor() {
+    this.items = [];
+    this.carrinho = {}; // Guarda { "Item A": 2, "Item B": 5 }
+    this.holdTimer = null;
+    this.pressStartTime = 0;
+    this.isScrolling = false;
+    this.isLongPress = false;
+    this.init();
+    this.checkTheme();
+  }
+
+  async init() {
+    this.showMsg("Carregando estoque...");
+    google.script.run
+      .withSuccessHandler(data => { 
+        this.items = data; 
+        // if data
+        this.renderList();
+        this.showMsg("Estoque sincronizado!"); 
+      })
+      .withFailureHandler(err => this.showMsg("Erro ao carregar: " + err))
+      .getStockData();
+  }
+
+  handleTouchStart(nomeItem) {
+    this.isScrolling = false;
+    this.pressStartTime = Date.now();
+    this.isLongPress = false;
+
+    // Timer para o Long Press (Edição Manual)
+    this.holdTimer = setTimeout(() => {
+      this.isLongPress = true;
+      this.abrirEditorManual(nomeItem);
+    }, 800); // Aumentamos para 800ms para dar margem ao scroll
+  }
+
+  handleTouchMove() {
+    // Se o utilizador mexer o dedo, é um scroll, não um clique
+    this.isScrolling = true;
+    clearTimeout(this.holdTimer);
+  }
+
+  handleTouchEnd(nomeItem) {
+    clearTimeout(this.holdTimer);
+    const duration = Date.now() - this.pressStartTime;
+
+    // SÓ ADICIONA 'tap' SE:
+    // 1. Não foi um scroll (isScrolling)
+    // 2. Não foi um long press
+    // 3. O toque teve uma duração mínima "orgânica" (ex: entre 50ms e 300ms)
+    if (!this.isScrolling && !this.isLongPress) {
+      if (duration > 50) { 
+        this.adicionarUm(nomeItem);
+      }
+    }
+  }
+
+  
+      handleSearch() {
+        const input = document.getElementById('itemInput');
+        const valorOriginal = input.value;
+        const datalist = document.getElementById('itemList');
+        const qtdInput = document.getElementById('qtdInput');
+
+        // Função para remover acentos e converter para minúsculas
+        const limparTexto = (txt) => 
+          txt.toLowerCase()
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "");
+
+        const valorLimpo = limparTexto(valorOriginal);
+        datalist.innerHTML = '';
+
+        // 1. Filtra ignorando acentos
+        const resultados = this.items.filter(item => 
+          limparTexto(item.nome).includes(valorLimpo)
+        );
+
+        resultados.slice(0, 10).forEach(item => {
+          const option = document.createElement('option');
+          option.value = item.nome;
+          option.textContent = `Disponível: ${item.disponivel}`;
+          datalist.appendChild(option);
+        });
+
+        // 2. Validação para o Match Exato (ainda requer o nome correto para o find)
+        const itemEncontrado = this.items.find(i => i.nome === valorOriginal);
+        
+        if (itemEncontrado) {
+          qtdInput.placeholder = `Máx: ${itemEncontrado.disponivel}`;
+          qtdInput.max = itemEncontrado.disponivel;
+        } else {
+          qtdInput.placeholder = "0";
+          qtdInput.removeAttribute('max');
+        }
+      }
+
+  renderList() {
+    const list = document.getElementById('itemList');
+    const monitor = document.getElementById('stockMonitor');
+    if (!monitor) return;
+    if (!this.items || this.items.length === 0) {
+        const nomesMeses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", 
+                            "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+        const mesAtual = nomesMeses[new Date().getMonth()];
+        
+        monitor.innerHTML = `<p style='text-align:center; opacity:0.6;'>Nenhum item cadastrado em ${mesAtual}.</p>`;
+        this.showMsg("Aviso: Nenhum item encontrado no estoque de " + mesAtual);
+        return;
+    }
+    // Usamos o value apenas para o nome do item para facilitar a busca no servidor
+    list.innerHTML = this.items.map(i => 
+      `<option value="${i.nome}">${i.nome} (Disponível: ${i.disponivel})</option>`
+    ).join('');
+    // 2. Monitor de Cards (Abaixo do card principal)
+    monitor.innerHTML = `<h3 style="margin: 20px 0 10px 5px; font-size: 1.1em;">
+        <i class="fas fa-boxes-stacked"></i> Itens no Almoxarifado
+      </h3>
+      <div class="monitor-grid">
+        ${this.items.map(i => {
+          const selecionado = this.carrinho[i.nome] || 0;
+          return `
+            <div class="stock-item-card" 
+                 onmousedown="if(event.button === 0) session.handleTouchStart('${i.nome}');"
+                 oncontextmenu="session.subtrairUm(event, '${i.nome}')"
+                 onmouseup="if(event.button === 0) session.handleTouchEnd('${i.nome}');"
+                 ontouchstart="session.handleTouchStart('${i.nome}')" 
+                 ontouchmove="session.handleTouchMove()"
+                 ontouchend="session.handleTouchEnd('${i.nome}')">
+              ${selecionado > 0 ? `<div class="selection-badge">${selecionado}</div>` : ''}
+              <span class="item-name">${i.nome}</span>
+              <div class="item-badge ${i.disponivel <= 2 ? 'bad-qty' : 'good-qty'}">
+                ${i.disponivel}
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+
+  }
+
+      // Função para clicar e adicionar +1
+        adicionarUm(nomeItem) {
+          const item = this.items.find(i => i.nome === nomeItem);
+          if (!item) return;
+
+          const atualNoCarrinho = this.carrinho[nomeItem] || 0;
+          
+          if (atualNoCarrinho < item.disponivel) {
+            this.carrinho[nomeItem] = atualNoCarrinho + 1;
+            this.playPopSound(); // Toca o pop ao clicar no card
+    
+            this.renderList(); // Re-renderiza para mostrar o badge
+          } else {
+            this.showMsg("⚠️ Limite de stock atingido!");
+          }
+        }
+      //Função pra clicar e subtrair -1
+        subtrairUm(event, nomeItem) {
+          // Impede o menu de contexto (botão direito) de aparecer
+          if (event) event.preventDefault();
+
+          if (this.carrinho[nomeItem]) {
+            this.carrinho[nomeItem] -= 1;
+            this.playPopSound(); // Som de feedback (podes fazer um som mais grave se quiseres)
+            
+            // Se chegar a zero, removemos do carrinho para limpar o badge
+            if (this.carrinho[nomeItem] <= 0) {
+              delete this.carrinho[nomeItem];
+            }
+            this.renderList();
+          }
+        }
+
+
+    submit() {
+    const itensNoCarrinho = Object.entries(this.carrinho).filter(([_, qtd]) => qtd > 0);
+    const responsavel = document.getElementById('quemSelect').value;
+
+    if (itensNoCarrinho.length === 0) {
+      this.showMsg("❌ Selecione ao menos um item clicando nos cards!");
+      return;
+    }
+
+    const totalItens = itensNoCarrinho.reduce((sum, [_, qtd]) => sum + qtd, 0);
+    const resumoTexto = itensNoCarrinho.map(([nome, qtd]) => `${qtd}x ${nome}`).join(', ');
+    
+    
+    this.abrirModalConfirmacao(resumoTexto, responsavel);
+  }
+
+  abrirModalConfirmacao(total, quem) {
+    const modal = document.createElement('div');
+    modal.id = "modalConfirm";
+    modal.className = "modal-overlay";
+    modal.innerHTML = `
+      <div class="modal-content">
+        <h3>Confirmar Retirada</h3>
+        <p>Deseja retirar <strong>${total} itens</strong> em nome de <strong>${quem}</strong>?</p>
+        <div class="modal-btns">
+          <button class="btn-confirm" onclick="session.processarSubmissao()">Sim, Confirmar</button>
+          <button class="btn-cancel" onclick="session.fecharModal()">Cancelar</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    document.querySelector('.app-session').classList.add('blur-bg');
+  }
+
+  fecharModal() {
+    const modal = document.getElementById('modalConfirm');
+    if (modal) modal.remove();
+    document.querySelector('.app-session').classList.remove('blur-bg');
+  }
+
+  async processarSubmissao() {
+    const btn = document.getElementById('submitBtn');
+    const responsavel = document.getElementById('quemSelect').value;
+    
+    this.fecharModal();
+    document.body.classList.add('processing');
+    btn.disabled = true;
+
+    // Enviamos o objeto carrinho e o responsável
+    google.script.run
+      .withSuccessHandler(() => {
+      this.playSuccessSound(); // Toca a nota feliz! :D
+        this.showMsg(" Retirada concluída!");
+        this.carrinho = {};
+        this.resetForm();
+      })
+      .withFailureHandler(err => {
+        this.showMsg(" Erro: " + err);
+        document.body.classList.remove('processing');
+        btn.disabled = false;
+      })
+      .submitMultiplosItens(this.carrinho, responsavel);
+  }
+
+
+  resetForm() {
+    document.body.classList.remove('processing');
+    document.getElementById('itemInput').value = '';
+    document.getElementById('qtdInput').value = '';
+    document.getElementById('submitBtn').disabled = false;
+    this.init(); 
+  }
+
+  checkTheme() {
+    const isDark = localStorage.getItem('dark-mode') === 'true';
+    if (isDark) {
+      document.body.classList.add('dark-mode');
+    }
+    this.updateThemeIcon(isDark);
+  }
+  
+  updateThemeIcon(isDark) {
+    const btn = document.getElementById('themeToggle');
+    if (btn) {
+      btn.textContent = isDark ? '☀️' : '⚫';
+    }
+  }
+
+  toggleDarkMode() {
+    const isDark = document.body.classList.toggle('dark-mode');
+    localStorage.setItem('dark-mode', isDark);
+    this.updateThemeIcon(isDark);
+    this.playSuccessSound; // Um feedback sonoro na troca de tema fica ótimo!
+  }
+  
+  showMsg(message) {
+    const div = document.getElementById('msgDiv');
+    div.textContent = message;
+    div.style.display = 'block';
+    
+    // Pequena animação de fade-out
+    setTimeout(() => {
+      div.style.display = 'none';
+    }, 4000);
+  }
+
+    // Gera um som de "Pop" curto e agudo
+  playPopSound() {
+    const context = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = context.createOscillator();
+    const gain = context.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(600, context.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(100, context.currentTime + 0.1);
+
+    gain.gain.setValueAtTime(0.2, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, context.currentTime + 0.1);
+
+    osc.connect(gain);
+    gain.connect(context.destination);
+
+    osc.start();
+    osc.stop(context.currentTime + 0.1);
+  }
+
+  // Gera uma nota feliz (acorde ascendente)
+  playSuccessSound() {
+    const context = new (window.AudioContext || window.webkitAudioContext)();
+    const notas = [523.25, 659.25, 783.99]; // Dó, Mi, Sol (C5, E5, G5)
+    
+    notas.forEach((freq, i) => {
+      const osc = context.createOscillator();
+      const gain = context.createGain();
+      
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freq, context.currentTime + (i * 0.1));
+      
+      gain.gain.setValueAtTime(0.1, context.currentTime + (i * 0.1));
+      gain.gain.exponentialRampToValueAtTime(0.01, context.currentTime + (i * 0.1) + 0.3);
+      
+      osc.connect(gain);
+      gain.connect(context.destination);
+      
+      osc.start(context.currentTime + (i * 0.1));
+      osc.stop(context.currentTime + (i * 0.1) + 0.3);
+    });
+  }
+
+  // Lógica de Pressão Longa
+  startPress(nomeItem) {
+    this.isLongPress = false;
+    this.holdTimer = setTimeout(() => {
+      this.isLongPress = true;
+      this.abrirEditorManual(nomeItem);
+    }, 600); // 600ms para considerar "long hold"
+  }
+
+  endPress(nomeItem) {
+    clearTimeout(this.holdTimer);
+    if (!this.isLongPress) {
+      this.adicionarUm(nomeItem);
+    }
+  }
+  // Atualizar o HTML da modal dentro de abrirEditorManual:
+  abrirEditorManual(nomeItem) {
+    const item = this.items.find(i => i.nome === nomeItem);
+    const qtdAtual = this.carrinho[nomeItem] || 0;
+    
+    const modal = document.createElement('div');
+    modal.className = "modal-overlay";
+    modal.id = "editorManual";
+    modal.innerHTML = `
+      <div class="modal-edit">
+        <h4><i class="fas fa-edit">Editar: </i> ${nomeItem}</h4>
+        <input type="number" id="manualQty" class="edit-input" value="${qtdAtual}" min="0" max="${item.disponivel}">
+        <p><small>Máximo disponível: ${item.disponivel}</small></p>
+        <div class="modal-btns">
+          <button class="btn-confirm" onclick="session.salvarEdicao('${nomeItem}')">OK</button>
+          <button class="btn-cancel" onclick="session.removerItemManual('${nomeItem}')">Remover</button>
+        </div>
+        <button class="btn-text" style="margin-top:10px; background:none; border:none; color:gray; cursor:pointer" onclick="session.fecharEditor()">Voltar</button>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    document.getElementById('manualQty').focus();
+  }
+
+  salvarEdicao(nomeItem) {
+    const input = document.getElementById('manualQty');
+    const novaQtd = parseInt(input.value);
+    const item = this.items.find(i => i.nome === nomeItem);
+    
+    if (novaQtd <= item.disponivel) {
+      this.carrinho[nomeItem] = novaQtd;
+      this.renderList();
+      this.fecharEditor();
+  
+    } else {
+      this.showMsg(`Máximo disponível: ${item.disponivel}`);
+      input.value = item.disponivel; // Sugere o máximo automático
+    }
+  }
+
+  fecharEditor() {
+    const modal = document.getElementById('editorManual');
+    if (modal) modal.remove();
+    document.querySelector('.app-session').classList.remove('blur-bg');
+  }
+  // Função que o botão 'Remover' chama agora
+  removerItemManual(nomeItem) {
+    delete this.carrinho[nomeItem]; // Remove completamente a chave do objeto
+    this.renderList();
+    this.fecharEditor();
+    this.playPopSound(); // Som de feedback
+    this.showMsg(`🗑️ ${nomeItem} removido da lista`);
+  }
+
+
+
+
+
+
+} // <-- fim da classe AppSession
+
+const session = new AppSession();
+</script>
