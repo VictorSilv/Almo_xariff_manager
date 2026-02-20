@@ -2,7 +2,9 @@
 class AppSession {
   constructor() {
     this.items = [];
-    this.carrinho = {}; // Guarda { "Item A": 2, "Item B": 5 }
+    this.usuarios = [];
+    this.carrinho = {}; 
+    this.usuarioAtivo = null;
     this.holdTimer = null;
     this.pressStartTime = 0;
     this.isScrolling = false;
@@ -12,16 +14,73 @@ class AppSession {
   }
 
   async init() {
-    this.showMsg("Carregando estoque...");
+    this.showMsg("Sincronizando estoque...");
     google.script.run
-      .withSuccessHandler(data => { 
-        this.items = data; 
-        // if data
-        this.renderList();
-        this.showMsg("Estoque sincronizado!"); 
+      .withSuccessHandler(data => {
+        this.items = data.stock;
+        this.usuarios = data.usuarios;
+        
+        // Se já houver um usuário logado (pós-submissão), redesenha a lista
+        if (this.usuarioAtivo) {
+          this.renderList();
+        } else {
+          this.renderUsers();
+        }
       })
       .withFailureHandler(err => this.showMsg("Erro ao carregar: " + err))
       .getStockData();
+  }
+
+  renderUsers() {
+    const grid = document.getElementById('userGrid');
+    const cores = ['#3498db', '#e67e22', '#9b59b6', '#1abc9c', '#f1c40f', '#e74c3c'];
+    grid.innerHTML = this.usuarios.map((u, i) => `
+      <div class="user-card" style="background:${cores[i % cores.length]}" onclick="session.login('${u}')">
+        ${u}
+      </div>
+    `).join('');
+  }
+  
+  login(nome) {
+    this.usuarioAtivo = nome;
+    this.playLoginSound(); // Toca o som de entrada
+    this.updateDynamicTitle();
+    
+    // Esconde login e mostra app com transição
+    const loginScreen = document.getElementById('loginScreen');
+    const appScreen = document.getElementById('appScreen');
+    
+    loginScreen.classList.add('hidden');
+    
+    setTimeout(() => {
+      loginScreen.style.display = 'none';
+      appScreen.style.display = 'block';
+      
+      // Mensagem de Boas-Vindas Amigável
+      this.showMsg(`Olá, ${nome}! O que vamos retirar hoje?`);
+      
+      setTimeout(() => {
+        appScreen.classList.remove('hidden');
+        document.getElementById('welcomeBanner').textContent = `Bom trabalho, ${nome}!`;
+        document.getElementById('activeUser').innerHTML = `<b><i class="fas fa-user-circle"></i> ${nome}</b>`;
+        this.renderList();
+      }, 50);
+    }, 500);
+  }
+
+  logout() {
+    location.reload(); // Forma mais simples de resetar a sessão
+  }
+
+  updateDynamicTitle() {
+    const meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", 
+                   "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+    const mesAtual = meses[new Date().getMonth()];
+    const titleElem = document.getElementById('dynamicTitle');
+    
+    if (titleElem) {
+      titleElem.innerHTML = `<i class="fas fa-warehouse"></i> Almoxarifado ${mesAtual} 2026`;
+    }
   }
 
   handleTouchStart(nomeItem) {
@@ -59,88 +118,75 @@ class AppSession {
 
   
       handleSearch() {
-        const input = document.getElementById('itemInput');
-        const valorOriginal = input.value;
-        const datalist = document.getElementById('itemList');
-        const qtdInput = document.getElementById('qtdInput');
-
-        // Função para remover acentos e converter para minúsculas
-        const limparTexto = (txt) => 
-          txt.toLowerCase()
-            .normalize("NFD")
-            .replace(/[\u0300-\u036f]/g, "");
-
-        const valorLimpo = limparTexto(valorOriginal);
-        datalist.innerHTML = '';
-
-        // 1. Filtra ignorando acentos
-        const resultados = this.items.filter(item => 
-          limparTexto(item.nome).includes(valorLimpo)
-        );
-
-        resultados.slice(0, 10).forEach(item => {
-          const option = document.createElement('option');
-          option.value = item.nome;
-          option.textContent = `Disponível: ${item.disponivel}`;
-          datalist.appendChild(option);
-        });
-
-        // 2. Validação para o Match Exato (ainda requer o nome correto para o find)
-        const itemEncontrado = this.items.find(i => i.nome === valorOriginal);
+        const valor = document.getElementById('itemInput').value.toLowerCase()
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      
+      // Seleciona todos os cards gerados no monitor
+      const cards = document.querySelectorAll('.stock-item-card');
+      
+      cards.forEach(card => {
+        // Pega o nome do item dentro do span do card
+        const nomeItem = card.querySelector('.item-name').textContent.toLowerCase()
+          .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
         
-        if (itemEncontrado) {
-          qtdInput.placeholder = `Máx: ${itemEncontrado.disponivel}`;
-          qtdInput.max = itemEncontrado.disponivel;
+        // Lógica: Se o nome contém o que foi digitado, mostra. Se não, esconde.
+        if (nomeItem.includes(valor)) {
+          card.style.display = "flex"; // Ou o display original (flex/block)
+          card.style.opacity = "1";
         } else {
-          qtdInput.placeholder = "0";
-          qtdInput.removeAttribute('max');
+          card.style.display = "none";
+          card.style.opacity = "0";
         }
+        });
       }
 
-  renderList() {
-    const list = document.getElementById('itemList');
-    const monitor = document.getElementById('stockMonitor');
-    if (!monitor) return;
-    if (!this.items || this.items.length === 0) {
-        const nomesMeses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", 
-                            "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
-        const mesAtual = nomesMeses[new Date().getMonth()];
-        
-        monitor.innerHTML = `<p style='text-align:center; opacity:0.6;'>Nenhum item cadastrado em ${mesAtual}.</p>`;
-        this.showMsg("Aviso: Nenhum item encontrado no estoque de " + mesAtual);
-        return;
-    }
-    // Usamos o value apenas para o nome do item para facilitar a busca no servidor
-    list.innerHTML = this.items.map(i => 
-      `<option value="${i.nome}">${i.nome} (Disponível: ${i.disponivel})</option>`
-    ).join('');
-    // 2. Monitor de Cards (Abaixo do card principal)
-    monitor.innerHTML = `<h3 style="margin: 20px 0 10px 5px; font-size: 1.1em;">
-        <i class="fas fa-boxes-stacked"></i> Itens no Almoxarifado
-      </h3>
-      <div class="monitor-grid">
-        ${this.items.map(i => {
-          const selecionado = this.carrinho[i.nome] || 0;
-          return `
-            <div class="stock-item-card" 
-                 onmousedown="if(event.button === 0) session.handleTouchStart('${i.nome}');"
-                 oncontextmenu="session.subtrairUm(event, '${i.nome}')"
-                 onmouseup="if(event.button === 0) session.handleTouchEnd('${i.nome}');"
-                 ontouchstart="session.handleTouchStart('${i.nome}')" 
-                 ontouchmove="session.handleTouchMove()"
-                 ontouchend="session.handleTouchEnd('${i.nome}')">
-              ${selecionado > 0 ? `<div class="selection-badge">${selecionado}</div>` : ''}
-              <span class="item-name">${i.nome}</span>
-              <div class="item-badge ${i.disponivel <= 2 ? 'bad-qty' : 'good-qty'}">
-                ${i.disponivel}
-              </div>
-            </div>
-          `;
-        }).join('')}
-      </div>
-    `;
+      renderList() {
+        const monitor = document.getElementById('stockMonitor');
+        if (!monitor) return;
 
-  }
+        if (!this.items || this.items.length === 0) {
+          const nomesMeses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", 
+                              "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+          const mesAtual = nomesMeses[new Date().getMonth()];
+          monitor.innerHTML = `<p style='text-align:center; opacity:0.6;'>Nenhum item cadastrado em ${mesAtual}.</p>`;
+          this.showMsg("Aviso: Nenhum item encontrado no estoque de " + mesAtual);
+          return;
+        }
+        
+        // 2. Monitor de Cards
+        monitor.innerHTML = `<h3 style="margin: 20px 0 10px 5px;"><i class="fas fa-boxes-stacked"></i> Itens no Almoxarifado</h3>
+          <div class="monitor-grid">
+            ${this.items.map(i => {
+              const selecionado = this.carrinho[i.nome] || 0;
+              return `
+                <div class="stock-item-card" 
+                    onmousedown="if(event.button === 0) session.handleTouchStart('${i.nome}');"
+                    oncontextmenu="session.subtrairUm(event, '${i.nome}')"
+                    onmouseup="if(event.button === 0) session.handleTouchEnd('${i.nome}');"
+                    ontouchstart="session.handleTouchStart('${i.nome}')" 
+                    ontouchmove="session.handleTouchMove()"
+                    ontouchend="session.handleTouchEnd('${i.nome}')">
+                  ${selecionado > 0 ? `<div class="selection-badge">${selecionado}</div>` : ''}
+                  <span class="item-name">${i.nome}</span>
+                  <div class="item-badge ${i.disponivel <= 2 ? 'bad-qty' : 'good-qty'}">
+                    ${i.disponivel}
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>`;
+
+        // 3. Re-aplica o filtro com as chavetas corrigidas
+        setTimeout(() => {
+          const inputFiltro = document.getElementById('itemInput');
+          if (inputFiltro && inputFiltro.value.length > 0) {
+            this.handleSearch(); 
+          } else {
+            this.showMsg("Estoque sincronizado!");
+          } // Fecho do else
+        }, 10); // Fecho do setTimeout
+      }
+
 
       // Função para clicar e adicionar +1
         adicionarUm(nomeItem) {
@@ -178,76 +224,84 @@ class AppSession {
 
     submit() {
     const itensNoCarrinho = Object.entries(this.carrinho).filter(([_, qtd]) => qtd > 0);
-    const responsavel = document.getElementById('quemSelect').value;
+    const responsavel = this.usuarioAtivo; 
 
     if (itensNoCarrinho.length === 0) {
-      this.showMsg("❌ Selecione ao menos um item clicando nos cards!");
+      this.showMsg("Selecione itens clicando nos cards!");
       return;
     }
 
-    const totalItens = itensNoCarrinho.reduce((sum, [_, qtd]) => sum + qtd, 0);
     const resumoTexto = itensNoCarrinho.map(([nome, qtd]) => `${qtd}x ${nome}`).join(', ');
-    
-    
     this.abrirModalConfirmacao(resumoTexto, responsavel);
   }
 
-  abrirModalConfirmacao(total, quem) {
-    const modal = document.createElement('div');
-    modal.id = "modalConfirm";
-    modal.className = "modal-overlay";
-    modal.innerHTML = `
-      <div class="modal-content">
-        <h3>Confirmar Retirada</h3>
-        <p>Deseja retirar <strong>${total} itens</strong> em nome de <strong>${quem}</strong>?</p>
-        <div class="modal-btns">
-          <button class="btn-confirm" onclick="session.processarSubmissao()">Sim, Confirmar</button>
-          <button class="btn-cancel" onclick="session.fecharModal()">Cancelar</button>
+  abrirModalConfirmacao(resumo, quem) {
+      const modal = document.createElement('div');
+      modal.id = "modalConfirm";
+      modal.className = "modal-overlay";
+      modal.innerHTML = `
+        <div class="modal-content">
+          <h3>Confirmar Retirada</h3>
+          <p><strong>${quem}</strong>, confirmar a saída de:</p>
+          <p style="font-size:0.9em; color:gray;">${resumo}</p>
+          <div class="modal-btns">
+            <button class="btn-confirm" onclick="session.processarSubmissao()">Sim, Confirmar</button>
+            <button class="btn-cancel" onclick="session.fecharModal()">Cancelar</button>
+          </div>
         </div>
-      </div>
-    `;
-    document.body.appendChild(modal);
-    document.querySelector('.app-session').classList.add('blur-bg');
+      `;
+      document.body.appendChild(modal);
+      
+      // Correção do Erro: Usa o ID do ecrã principal para o blur
+      document.getElementById('appScreen').classList.add('blur-bg');
   }
 
-  fecharModal() {
-    const modal = document.getElementById('modalConfirm');
-    if (modal) modal.remove();
-    document.querySelector('.app-session').classList.remove('blur-bg');
-  }
+    fecharModal() {
+      const modal = document.getElementById('modalConfirm');
+      if (modal) modal.remove();
+      document.getElementById('appScreen').classList.remove('blur-bg');
+    }
 
-  async processarSubmissao() {
+    async processarSubmissao() {
     const btn = document.getElementById('submitBtn');
-    const responsavel = document.getElementById('quemSelect').value;
-    
     this.fecharModal();
+    
     document.body.classList.add('processing');
-    btn.disabled = true;
+    if(btn) btn.disabled = true;
 
-    // Enviamos o objeto carrinho e o responsável
     google.script.run
       .withSuccessHandler(() => {
-      this.playSuccessSound(); // Toca a nota feliz! :D
-        this.showMsg(" Retirada concluída!");
-        this.carrinho = {};
+        this.playSuccessSound();
+        this.showMsg("✅ Retirada concluída!");
+        
+        // IMPORTANTE: Limpa o carrinho local ANTES de dar o init
+        this.carrinho = {}; 
         this.resetForm();
       })
       .withFailureHandler(err => {
-        this.showMsg(" Erro: " + err);
+        this.showMsg("❌ Erro: " + err);
         document.body.classList.remove('processing');
-        btn.disabled = false;
+        if(btn) btn.disabled = false;
       })
-      .submitMultiplosItens(this.carrinho, responsavel);
+      .submitMultiplosItens(this.carrinho, this.usuarioAtivo);
   }
-
 
   resetForm() {
+    // Limpa o processamento visual
     document.body.classList.remove('processing');
-    document.getElementById('itemInput').value = '';
-    document.getElementById('qtdInput').value = '';
-    document.getElementById('submitBtn').disabled = false;
+    
+    // Reativa o botão
+    const btn = document.getElementById('submitBtn');
+    if (btn) btn.disabled = false;
+
+    // Limpa o texto da busca para não filtrar o novo estoque
+    const inputFiltro = document.getElementById('itemInput');
+    if (inputFiltro) inputFiltro.value = '';
+
+    // Recarrega os dados do servidor (o renderList será chamado no sucesso do init)
     this.init(); 
   }
+
 
   checkTheme() {
     const isDark = localStorage.getItem('dark-mode') === 'true';
@@ -324,6 +378,24 @@ class AppSession {
       osc.stop(context.currentTime + (i * 0.1) + 0.3);
     });
   }
+  // Som de Arpejo Feliz para o Login
+  playLoginSound() {
+    const context = new (window.AudioContext || window.webkitAudioContext)();
+    const notas = [261.63, 329.63, 392.00, 523.25]; // Dó, Mi, Sol, Dó (C4, E4, G4, C5)
+    
+    notas.forEach((freq, i) => {
+      const osc = context.createOscillator();
+      const gain = context.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, context.currentTime + (i * 0.08));
+      gain.gain.setValueAtTime(0.1, context.currentTime + (i * 0.08));
+      gain.gain.exponentialRampToValueAtTime(0.01, context.currentTime + (i * 0.08) + 0.4);
+      osc.connect(gain);
+      gain.connect(context.destination);
+      osc.start(context.currentTime + (i * 0.08));
+      osc.stop(context.currentTime + (i * 0.08) + 0.4);
+    });
+  }
 
   // Lógica de Pressão Longa
   startPress(nomeItem) {
@@ -383,15 +455,25 @@ class AppSession {
   fecharEditor() {
     const modal = document.getElementById('editorManual');
     if (modal) modal.remove();
-    document.querySelector('.app-session').classList.remove('blur-bg');
+    
+    // CORREÇÃO: Usa o ID correto para remover o blur
+    const appContainer = document.getElementById('appScreen');
+    if (appContainer) {
+      appContainer.classList.remove('blur-bg');
+    }
+    
+    this.isLongPress = false; // Reset de segurança
   }
-  // Função que o botão 'Remover' chama agora
+
+  // Remova a versão duplicada e mantenha apenas esta:
   removerItemManual(nomeItem) {
-    delete this.carrinho[nomeItem]; // Remove completamente a chave do objeto
-    this.renderList();
+    if (this.carrinho[nomeItem]) {
+      delete this.carrinho[nomeItem]; 
+      this.renderList();
+      this.playPopSound();
+      this.showMsg(`🗑️ Seleção de ${nomeItem} removida.`);
+    }
     this.fecharEditor();
-    this.playPopSound(); // Som de feedback
-    this.showMsg(`🗑️ ${nomeItem} removido da lista`);
   }
 
 
