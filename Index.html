@@ -1,80 +1,41 @@
-function doGet() {
-  return HtmlService.createTemplateFromFile('Index')
-    .evaluate()
-    .setTitle('Almoxarifado Controlhe 2026')
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1')
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
-}
+<!DOCTYPE html>
+<html lang="pt-br">
+  <head>
+    <base target="_top">
+    <?!= include('Styles'); ?>
+  </head>
+  <body>
+    <div id="msgDiv"></div>
 
-function include(filename) {
-  return HtmlService.createHtmlOutputFromFile(filename).getContent();
-}
+    <!-- Ecrã de Login -->
+    <div id="loginScreen" class="screen">
+      <h1><i class="fas fa-users"></i> Quem está retirando?</h1>
+      <div id="userGrid" class="user-grid"></div>
+    </div>
 
-// Retorna lista de itens e stocks para o UI
+    <!-- Ecrã do App -->
+     <div id="appScreen" class="screen hidden">
+  <header style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+    
+      <h2 id="dynamicTitle" style="margin:0;"><i class="fas fa-warehouse"></i> Almoxarifado</h2>
+      <span id="activeUser" onclick="session.logout()" style="cursor:pointer; color:var(--accent); font-size:0.9em;"></span>
+    
+    <button id="themeToggle" onclick="session.toggleDarkMode()" style="background:none; border:none; font-size:1.8rem; cursor:pointer;">⚫</button>
+  </header>
 
-// Retorna lista de itens e stocks para o UI
-function getStockData() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const agora = new Date();
-  
-  // Mapeamento manual para garantir o match com 'Jan_2026', 'Fev_2026', etc.
-  const mesesAbrev = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
-  const mesAbrev = mesesAbrev[agora.getMonth()];
-  const nomeAba = mesAbrev + "_2026";
-  
-  const sheet = ss.getSheetByName(nomeAba);
-  
-  if (!sheet) {
-    Logger.log("Aba não encontrada: " + nomeAba);
-    return [];
-  }
+  <div id="welcomeBanner" style="text-align:center; margin-bottom:15px; font-weight:lighter; opacity:0.8;"></div>
 
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 3) return []; // Se a tabela estiver vazia
-
-  // Pegamos da Coluna A (1) até a I (9)
-  const data = sheet.getRange(3, 1, lastRow - 2, 9).getValues();
-  
-  return data
-    .map(r => ({
-      nome: r[0],       // Coluna A (Índice 0)
-      disponivel: r[8]  // Coluna I (Índice 8)
-    }))
-    .filter(r => r.nome !== "" && r.nome !== undefined);
-}
-
-// Processa a retirada
-function submitMultiplosItens(carrinho, responsavel) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const agora = new Date();
-  const mesesAbrev = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
-  const nomeAba = mesesAbrev[agora.getMonth()] + "_2026";
-  const sheet = ss.getSheetByName(nomeAba);
-  const logSheet = ss.getSheetByName('Resumo') || ss.insertSheet('Resumo');
-
-  const data = sheet.getDataRange().getValues();
-  const colMap = { "FB": 5, "FF": 6, "Outra": 7 }; // Colunas E, F, G
-
-  // Itera sobre cada item no carrinho vindo do cliente
-  for (let itemNome in carrinho) {
-    let quantidade = Number(carrinho[itemNome]);
-    if (quantidade <= 0) continue;
-
-    // Encontra a linha do item na Coluna A (índice 0)
-    for (let i = 2; i < data.length; i++) {
-      if (data[i][0] === itemNome) {
-        // Atualiza a célula do funcionário
-        let celula = sheet.getRange(i + 1, colMap[responsavel]);
-        celula.setValue((Number(celula.getValue()) || 0) + quantidade);
-        
-        // Log no Resumo
-        logSheet.appendRow([agora, itemNome, quantidade, responsavel]);
-        break;
-      }
-    }
-  }
-  return true;
-}
+  <div class="card">
+  <input type="text" id="itemInput" placeholder="Filtrar estoque..." oninput="session.handleSearch()" autocomplete="off">
+  <button id="submitBtn" onclick="session.submit()">Confirmar Retirada</button>
+</div>
 
 
-function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+  <div id="stockMonitor"></div>
+</div>
+
+    
+
+    <?!= include('Scripts'); ?>
+  </body>
+</html>
